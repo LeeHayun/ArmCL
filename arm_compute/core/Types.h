@@ -90,6 +90,17 @@ enum class DataType
     SIZET    /**< size_t */
 };
 
+/** Available matrix formats */
+enum class MatrixFormat
+{
+    UNKNOWN, /**< Unknown matrix format */
+    DENSE,   /**< dense */
+    //COO,     /**< coordinate list */
+    CSR,     /**< compressed sparse row */
+    //CSC,     /**< compressed sparse column */
+    SIZET    /**< size_t */
+};
+
 /** Available Sampling Policies */
 enum class SamplingPolicy
 {

@@ -119,6 +119,15 @@ std::tuple<unsigned int, unsigned int, int> parse_ppm_header(std::ifstream &fs);
  */
 std::tuple<std::vector<unsigned long>, bool, std::string> parse_npy_header(std::ifstream &fs);
 
+/** Parse the mtx header from an input file stream. At the end of the execution,
+ *  the file position pointer will be located at the first pixel stored in the mtx file
+ *
+ * @param[in] fs Input file stream to parse
+ *
+ * @return The rows, columns and entries stored in the header of the MTX file
+ */
+std::tuple<unsigned long, unsigned long, unsigned long> parse_mtx_header(std::ifstream &fs);
+
 /** Obtain numpy type string from DataType.
  *
  * @param[in] data_type Data type.
@@ -669,6 +678,199 @@ private:
     std::string                _typestring;
 };
 
+/** Matrix Market data loader */
+class MTXLoader
+{
+public:
+    /** Default constructor */
+    MTXLoader()
+        : _fs(), _rows(), _columns(), _entries()
+    {
+    }
+
+    /** Open a MTX file and reads its metadata
+     *
+     * @param[in] npy_filename File to open
+     */
+    void open(const std::string &mtx_filename)
+    {
+        ARM_COMPUTE_ERROR_ON(is_open());
+        try
+        {
+            _fs.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+            _fs.open(mtx_filename, std::ios::in);
+
+            std::tie(_rows, _columns, _entries) = parse_mtx_header(_fs);
+        }
+        catch(const std::ifstream::failure &e)
+        {
+            ARM_COMPUTE_ERROR("Accessing %s: %s", mtx_filename.c_str(), e.what());
+        }
+    }
+    /** Return true if a MTX file is currently open */
+    bool is_open()
+    {
+        return _fs.is_open();
+    }
+
+    /** Initialise the tensor's metadata with the dimensions of the MTX file currently open
+     *
+     * @param[out] tensor Tensor to initialise
+     * @param[in]  dt     Data type to use for the tensor
+     */
+    template <typename T>
+    void init_tensor(T &tensor, arm_compute::DataType dt, arm_compute::MatrixFormat mf)
+    {
+        ARM_COMPUTE_ERROR_ON(!is_open());
+        ARM_COMPUTE_ERROR_ON(dt != arm_compute::DataType::F32);
+
+        // HAYUN: Need to new structure for sparse format (csr, coo, ...)
+        arm_compute::TensorInfo tensor_info(TensorShape(_columns, _rows), 1, dt);
+        tensor.allocator()->init(tensor_info);
+    }
+
+    /** Initialise the tensor's metadata with the dimensions of the MTX file currently open
+     *
+     * @param[out] tensor Tensor to initialise
+     * @param[in]  dt     Data type to use for the tensor
+     */
+    template <typename T>
+    void init_tensor(T &tensor_values, T &tensor_ptr, T &tensor_idx, arm_compute::DataType dt, arm_compute::MatrixFormat mf)
+    {
+        ARM_COMPUTE_ERROR_ON(!is_open());
+        ARM_COMPUTE_ERROR_ON(dt != arm_compute::DataType::F32);
+
+        // HAYUN: Need to new structure for sparse format (csr, coo, ...)
+        if(mf == arm_compute::MatrixFormat::CSR)
+        {
+            arm_compute::TensorInfo tensor_info_values(TensorShape(_entries), 1, dt);
+            tensor_values.allocator()->init(tensor_info_values);
+            arm_compute::TensorInfo tensor_info_ptr(TensorShape(_rows+1), 1, arm_compute::DataType::U32);
+            tensor_ptr.allocator()->init(tensor_info_ptr);
+            arm_compute::TensorInfo tensor_info_idx(TensorShape(_entries), 1, arm_compute::DataType::U32);
+            tensor_idx.allocator()->init(tensor_info_idx);
+        }
+    }
+
+    /** Fill a tensor with the content of the currently open MTX file.
+     *
+     * @note If the tensor is a CLTensor, the function maps and unmaps the tensor
+     *
+     * @param[in,out] tensor Tensor to fill (Must be allocated, and of matching dimensions with the opened NPY).
+     */
+    template <typename T>
+    void fill_tensor(T &tensor_values, T &tensor_ptr, T &tensor_idx)
+    {
+        ARM_COMPUTE_ERROR_ON(!is_open());
+        ARM_COMPUTE_ERROR_ON_DATA_TYPE_NOT_IN(&tensor_values, arm_compute::DataType::F32);
+        ARM_COMPUTE_ERROR_ON_DATA_TYPE_NOT_IN(&tensor_ptr, arm_compute::DataType::U32);
+        ARM_COMPUTE_ERROR_ON_DATA_TYPE_NOT_IN(&tensor_idx, arm_compute::DataType::U32);
+        try
+        {
+            // Map buffer if creating a CLTensor
+            map(tensor_values, true);
+            map(tensor_ptr, true);
+            map(tensor_idx, true);
+
+            switch(tensor_values.info()->data_type())
+            {
+                case arm_compute::DataType::F32:
+                {
+                    unsigned int *J, *row_ptr;
+                    unsigned int i, current_row = 0;
+                    float *val;
+
+                    // Read data
+                    if(tensor_values.info()->padding().empty())
+                    {
+                        // If tensor has no padding read directly from stream.
+                        //_fs.read(reinterpret_cast<char *>(tensor.buffer()), tensor.info()->total_size());
+                        J = new unsigned int [_entries];
+                        row_ptr = new unsigned int[_rows+1];
+                        val = new float [_entries];
+
+                        row_ptr[0] = 0;
+
+                        for(unsigned int entry=0; entry<_entries; entry++)
+                        {
+                            _fs >> i >> J[entry] >> val[entry];
+
+                            // Adjust from 1-based to 0-based
+                            i--;
+                            J[entry]--;
+
+                            while(i >= current_row)
+                            {
+                                row_ptr[i++] = entry;
+                            }
+                        }
+
+                        row_ptr[current_row] = _entries;
+
+                        std::copy(val, val+_entries, reinterpret_cast<float *>(tensor_values.buffer()));
+                        std::copy(row_ptr, row_ptr+_rows+1, reinterpret_cast<unsigned int *>(tensor_ptr.buffer()));
+                        std::copy(J, J+_entries, reinterpret_cast<unsigned int *>(tensor_idx.buffer()));
+                    }
+                    else
+                    {
+                        // HAYUN: I don't care padding (currently)
+                        ARM_COMPUTE_ERROR("Padding doesn't supported");
+                        /*
+                        // If tensor has padding accessing tensor elements through execution window.
+                        Window window;
+                        window.use_tensor_dimensions(tensor.info()->tensor_shape());
+
+                        execute_window_loop(window, [&](const Coordinates & id)
+                        {
+                            _fs.read(reinterpret_cast<char *>(tensor.ptr_to_element(id)), tensor.info()->element_size());
+                        });
+                        */
+                    }
+
+                    break;
+                }
+                default:
+                    ARM_COMPUTE_ERROR("Unsupported data type");
+            }
+
+            // Unmap buffer if creating a CLTensor
+            unmap(tensor_values);
+            unmap(tensor_ptr);
+            unmap(tensor_idx);
+        }
+        catch(const std::ifstream::failure &e)
+        {
+            ARM_COMPUTE_ERROR("Loading MTX file: %s", e.what());
+        }
+    }
+
+    /** Return the rows of the currently open MTX file.
+     */
+    unsigned int rows() const
+    {
+        return _rows;
+    }
+    
+    /** Return the columns of the currently open MTX file.
+     */
+    unsigned int columns() const
+    {
+        return _columns;
+    }
+    /** Return the entries of the currently open MTX file.
+     */
+    unsigned int entries() const
+    {
+        return _entries;
+    }
+
+private:
+    std::ifstream _fs;
+    unsigned int  _rows;
+    unsigned int  _columns;
+    unsigned int  _entries;
+};
+
 /** Template helper function to save a tensor image to a PPM file.
  *
  * @note Only U8 and RGB888 formats supported.
@@ -919,6 +1121,13 @@ void init_sgemm_output(T &dst, T &src0, T &src1, arm_compute::DataType dt)
 {
     dst.allocator()->init(TensorInfo(TensorShape(src1.info()->dimension(0), src0.info()->dimension(1)), 1, dt));
 }
+
+template <typename T>
+void init_sparse_sgemm_output(T &dst, T &src0, unsigned int src1_col, arm_compute::DataType dt)
+{
+    dst.allocator()->init(TensorInfo(TensorShape(src1_col, src0.info()->dimension(1)), 1, dt));
+}
+
 /** This function returns the amount of memory free reading from /proc/meminfo
  *
  * @return The free memory in kB

@@ -40,7 +40,7 @@ namespace
  */
 void discard_comments(std::ifstream &fs)
 {
-    while(fs.peek() == '#')
+    while(fs.peek() == '#' || fs.peek() == '&')
     {
         fs.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
     }
@@ -190,6 +190,26 @@ std::tuple<std::vector<unsigned long>, bool, std::string> parse_npy_header(std::
     }
 
     return std::make_tuple(shape, fortran_order, typestr);
+}
+
+std::tuple<unsigned long, unsigned long, unsigned long> parse_mtx_header(std::ifstream &fs)
+{
+    discard_comments_and_spaces(fs);
+
+    unsigned int rows = 0;
+    fs >> rows;
+
+    discard_comments_and_spaces(fs);
+
+    unsigned int columns = 0;
+    fs >> columns;
+
+    discard_comments_and_spaces(fs);
+
+    unsigned int entries = 0;
+    fs >> entries;
+
+    return std::make_tuple(rows, columns, entries);
 }
 
 /** This function returns the amount of memory free reading from /proc/meminfo

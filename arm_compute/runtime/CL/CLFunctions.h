@@ -107,6 +107,8 @@
 #include "arm_compute/runtime/CL/functions/CLSobel5x5.h"
 #include "arm_compute/runtime/CL/functions/CLSobel7x7.h"
 #include "arm_compute/runtime/CL/functions/CLSoftmaxLayer.h"
+#include "arm_compute/runtime/CL/functions/CLSparseGEMM.h"
+#include "arm_compute/runtime/CL/functions/CLSparseGEMMConvolutionLayer.h"
 #include "arm_compute/runtime/CL/functions/CLTableLookup.h"
 #include "arm_compute/runtime/CL/functions/CLThreshold.h"
 #include "arm_compute/runtime/CL/functions/CLTranspose.h"
