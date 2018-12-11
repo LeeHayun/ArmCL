@@ -777,7 +777,7 @@ public:
                 case arm_compute::DataType::F32:
                 {
                     unsigned int *J, *row_ptr;
-                    unsigned int i, current_row = 0;
+                    unsigned int i, current_row = 1;
                     float *val;
 
                     // Read data
@@ -796,15 +796,14 @@ public:
                             _fs >> i >> J[entry] >> val[entry];
 
                             // Adjust from 1-based to 0-based
-                            i--;
                             J[entry]--;
 
-                            while(i >= current_row)
+                            while (i > current_row)
                             {
-                                row_ptr[i++] = entry;
+                                row_ptr[current_row] = entry;
+                                current_row++;
                             }
                         }
-
                         row_ptr[current_row] = _entries;
 
                         std::copy(val, val+_entries, reinterpret_cast<float *>(tensor_values.buffer()));

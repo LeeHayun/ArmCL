@@ -36,6 +36,24 @@
 using namespace arm_compute;
 using namespace utils;
 
+double measure(CLGEMM *clgemm, int n_times) {
+    //arm_compute::CLScheduler::get().default_init();
+    //graph->graph_init(true);
+    clgemm->run();
+    arm_compute::CLScheduler::get().sync();
+
+    auto tbegin = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < n_times; i++) {
+        clgemm->run();
+    }
+    arm_compute::CLScheduler::get().sync();
+    auto tend = std::chrono::high_resolution_clock::now();
+
+
+    double cost = std::chrono::duration_cast<std::chrono::duration<double>>(tend - tbegin).count();
+    return cost / n_times;
+}
+
 class CLSGEMMExample : public Example
 {
 public:
@@ -162,8 +180,12 @@ public:
             fill_random_tensor(src2, -1.f, 1.f);
         }
 
+        //tuner.load_from_file("tune.csv");
+
         // Dummy run for CLTuner
         sgemm.run();
+        CLScheduler::get().sync();
+        tuner.save_to_file("tune.csv");
     }
     void do_run() override
     {
@@ -172,6 +194,10 @@ public:
 
         // Make sure all the OpenCL jobs are done executing:
         CLScheduler::get().sync();
+
+        //measure(&sgemm, 50);
+        //double tt = measure(&sgemm, 100);
+        //std::cout << "Time : " << tt << std::endl;
     }
     void do_teardown() override
     {

@@ -251,7 +251,8 @@ void CLSparseGEMM::run()
 */
 
     // Run matrix multiply kernel
-    CLScheduler::get().enqueue(_sparse_mm_kernel, !_run_addition);
+    //CLScheduler::get().enqueue(_sparse_mm_kernel, !_run_addition);
+    CLScheduler::get().enqueue(_sparse_mm_kernel, true);
 
     // Run matrix addition kernel
 /*

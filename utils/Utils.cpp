@@ -40,7 +40,7 @@ namespace
  */
 void discard_comments(std::ifstream &fs)
 {
-    while(fs.peek() == '#' || fs.peek() == '&')
+    while(fs.peek() == '#' || fs.peek() == '%')
     {
         fs.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
     }

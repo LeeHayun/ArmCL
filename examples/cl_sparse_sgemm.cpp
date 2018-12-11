@@ -13,6 +13,24 @@
 using namespace arm_compute;
 using namespace utils;
 
+double measure(CLSparseGEMM *clgemm, int n_times) {
+    //arm_compute::CLScheduler::get().default_init();
+    //graph->graph_init(true);
+    clgemm->run();
+    arm_compute::CLScheduler::get().sync();
+
+    auto tbegin = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < n_times; i++) {
+        clgemm->run();
+    }
+    arm_compute::CLScheduler::get().sync();
+    auto tend = std::chrono::high_resolution_clock::now();
+
+
+    double cost = std::chrono::duration_cast<std::chrono::duration<double>>(tend - tbegin).count();
+    return cost / n_times;
+}
+
 class CLSparseSGEMMExample : public Example
 {
 public:
@@ -87,11 +105,11 @@ public:
             }
             */
         }
-
+        
         init_sparse_sgemm_output(dst, src0, mtx_m2.columns(), DataType::F32);
 
         // Configure function
-        sparse_sgemm.configure(&src0, &src1_values, &src1_col_idx, &src1_row_ptr, nullptr, &dst, alpha, beta);
+        sparse_csr_gemm.configure(&src0, &src1_values, &src1_col_idx, &src1_row_ptr, nullptr, &dst, alpha, beta);
 
         // Allocate all the images
         src0.allocator()->allocate();
@@ -105,6 +123,10 @@ public:
         {
             npy_m1.fill_tensor(src0);
             mtx_m2.fill_tensor(src1_values, src1_row_ptr, src1_col_idx);
+            print_tensor<float>(&src0);
+            print_tensor<float>(&src1_values);
+            print_tensor<unsigned int>(&src1_row_ptr);
+            print_tensor<unsigned int>(&src1_col_idx);
 
             output_filename = "sgemm_out.npy";
             is_fortran      = npy_m1.is_fortran();
@@ -122,15 +144,24 @@ public:
         }
 
         // Dummy run for CLTuner
-        sparse_sgemm.run();
+        std::cout << "Demmy run for CLTuner" << std::endl;
+        sparse_csr_gemm.run();
+        tuner.save_to_file("tune.csv");
     }
     void do_run() override
     {
         // Execute the function
-        sparse_sgemm.run();
+        std::cout << "Execute the function" << std::endl;
+        sparse_csr_gemm.run();
 
         // Make sure all the OpenCL jobs are done executing:
         CLScheduler::get().sync();
+
+        measure(&sparse_csr_gemm, 50);
+        double tt = measure(&sparse_csr_gemm, 100);
+        std::cout << "Time: " << tt << std::endl;
+
+        print_tensor<float>(&dst);
     }
     void do_teardown() override
     {
@@ -140,9 +171,37 @@ public:
         }
     }
 
+    template <typename T>
+    void print_tensor(CLTensor *tensor, bool print_coord = false)
+    {
+        //tensor.print(std::cout, IOFormatInfo(IOFormatInfo::PrintRegion::Full));
+        return;
+        
+        tensor->map(true);
+
+        Window window;
+        T val;
+        window.use_tensor_dimensions(tensor->info()->tensor_shape());
+        Iterator it(tensor, window);
+        execute_window_loop(window, [&](const Coordinates & id)
+        {
+            if (id.x() == 0)
+                std::cout << std::endl;
+            if (print_coord)
+                std::cout << "(" << id.x() << ", " << id.y() << ", " << id.z() << ") ";
+
+            val = *reinterpret_cast<T *>(it.ptr());
+            std::cout << val << " ";
+        },
+        it);
+        std::cout << std::endl;
+
+        tensor->unmap();
+    }
+
 private:
     CLTensor     src0{}, src1_values{}, src1_row_ptr{}, src1_col_idx{}, dst{};
-    CLSparseGEMM sparse_sgemm{};
+    CLSparseGEMM sparse_csr_gemm{};
     CLTuner      tuner{};
     float        alpha{}, beta{};
     bool         is_fortran{};

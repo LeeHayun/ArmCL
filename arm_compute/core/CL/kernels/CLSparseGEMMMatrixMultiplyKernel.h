@@ -61,7 +61,7 @@ public:
      * @param[in]  reshape_info              (Optional) GEMM reshape info. If is_interleaved_transposed = true, this object must contain the information to understand how the matrix A and matrix B have been reshaped
      *
      */
-    void configure(const ICLTensor *input0, const ICLTensor *input1_values, const ICLTensor *input1_col_idx, const ICLTensor *input1_row_ptr, ICLTensor *output, float alpha, bool is_interleaved_transposed = true, const GEMMReshapeInfo &reshape_info = GEMMReshapeInfo());
+    void configure(const ICLTensor *input0, const ICLTensor *input1_values, const ICLTensor *input1_col_idx, const ICLTensor *input1_row_ptr, ICLTensor *output, float alpha, bool is_interleaved_transposed = false, const GEMMReshapeInfo &reshape_info = GEMMReshapeInfo());
     /** Static function to check if given info will lead to a valid configuration of @ref CLGEMMMatrixMultiplyKernel
      *
      * @param[in] input0                    Input tensor containing the Matrix A. Data types supported: QS8/QS16/F16/F32

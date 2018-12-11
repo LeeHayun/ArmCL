@@ -141,8 +141,11 @@ inline std::pair<Status, Window> validate_and_configure_window(ITensorInfo *inpu
     else // The input tensors have not been reshaped
     {
         // Special case for 1xN, 2xN, 3xN and 4xN input0 tensor. num_elems_processed_per_iteration_x is set up for the default case.
-        num_elems_processed_per_iteration_x = max_cl_vector_width / data_size_from_type(data_type);
-        num_elems_processed_per_iteration_y = std::min(static_cast<int>(output->dimension(1)), 4);
+        // HAYUN:
+        //num_elems_processed_per_iteration_x = max_cl_vector_width / data_size_from_type(data_type);
+        //num_elems_processed_per_iteration_y = std::min(static_cast<int>(output->dimension(1)), 4);
+        num_elems_processed_per_iteration_x = 1;
+        num_elems_processed_per_iteration_y = 1;
 
         // Create kernels according to the architecture, data type and input size.
         GPUTarget arch_target = get_arch_from_target(gpu_target);
@@ -184,6 +187,9 @@ CLSparseGEMMMatrixMultiplyKernel::CLSparseGEMMMatrixMultiplyKernel()
 void CLSparseGEMMMatrixMultiplyKernel::configure(const ICLTensor *input0, const ICLTensor *input1_values, const ICLTensor *input1_col_idx, const ICLTensor *input1_row_ptr, ICLTensor *output, float alpha, bool is_interleaved_transposed, const GEMMReshapeInfo &reshape_info)
 {
     ARM_COMPUTE_ERROR_ON_NULLPTR(input0, input1_values, input1_col_idx, input1_row_ptr, output);
+
+    // HAYUN: ...
+    is_interleaved_transposed = false;
 
     TensorShape input1_shape;
     input1_shape.set_num_dimensions(2);
@@ -274,7 +280,16 @@ void CLSparseGEMMMatrixMultiplyKernel::configure(const ICLTensor *input0, const 
     const bool is_bifrost = get_arch_from_target(gpu_target) == GPUTarget::BIFROST;
 
     std::string kernel_name;
-    kernel_name = "sparse_gemm_mm";
+    int m = input0->info()->dimension(1);
+    if (m == 1)
+    {
+        kernel_name = "sparse_csr_gemv";
+    }
+    else
+    {
+        kernel_name = "sparse_csr_gemm";
+    }
+    
     /*
     if(is_interleaved_transposed)
     {
@@ -333,6 +348,9 @@ void CLSparseGEMMMatrixMultiplyKernel::configure(const ICLTensor *input0, const 
     }
     */
 
+    // HAYUN
+    build_opts.add_option("-fkernel-unroller");
+
     // Create kernel
     _kernel = static_cast<cl::Kernel>(CLKernelLibrary::get().create_kernel(kernel_name, build_opts.options()));
 
@@ -377,6 +395,8 @@ void CLSparseGEMMMatrixMultiplyKernel::run(const Window &window, cl::CommandQueu
 {
     ARM_COMPUTE_ERROR_ON_UNCONFIGURED_KERNEL(this);
     ARM_COMPUTE_ERROR_ON_INVALID_SUBWINDOW(ICLKernel::window(), window);
+    
+    //std::cout << __func__ << "(start): " << __LINE__ << std::endl;
 
     // HAYUN: ???
     if(_input1_values->info()->num_dimensions() < 3)
@@ -393,6 +413,7 @@ void CLSparseGEMMMatrixMultiplyKernel::run(const Window &window, cl::CommandQueu
 
     do
     {
+//std::cout << __func__ << "(loop): " << __LINE__ << std::endl;
         Window slice_b = slice;
         // Don't slice matrix B along the z dimension if matrix B has just 2 dimensions and matrix A more than 2
         // This scenario can happen when the matrix multiplication is used to perform a convolution operation
@@ -402,18 +423,14 @@ void CLSparseGEMMMatrixMultiplyKernel::run(const Window &window, cl::CommandQueu
         }
 
         unsigned int idx = 0;
-        add_2D_tensor_argument(idx, _input0, slice);
+        add_1D_tensor_argument(idx, _input0, slice);
         // HAYUN: ??? slice_b?
-        add_2D_tensor_argument(idx, _input1_values, slice_b);
-        add_2D_tensor_argument(idx, _input1_col_idx, slice_b);
-        add_2D_tensor_argument(idx, _input1_row_ptr, slice_b);
-        add_2D_tensor_argument(idx, _output, slice);
-        _kernel.setArg<cl_uint>(idx++, static_cast<unsigned int>(_input0->info()->strides_in_bytes()[2]));
-        _kernel.setArg<cl_uint>(idx++, static_cast<unsigned int>(_input1_values->info()->strides_in_bytes()[2]));
-        _kernel.setArg<cl_uint>(idx++, static_cast<unsigned int>(_input1_col_idx->info()->strides_in_bytes()[2]));
-        _kernel.setArg<cl_uint>(idx++, static_cast<unsigned int>(_input1_row_ptr->info()->strides_in_bytes()[2]));
-        _kernel.setArg<cl_uint>(idx++, static_cast<unsigned int>(_output->info()->strides_in_bytes()[2]));
+        add_1D_tensor_argument(idx, _input1_values, slice_b);
+        add_1D_tensor_argument(idx, _input1_row_ptr, slice_b);
+        add_1D_tensor_argument(idx, _input1_col_idx, slice_b);
+        add_1D_tensor_argument(idx, _output, slice);
         enqueue(queue, *this, slice, _lws_hint);
     }
     while(window.slide_window_slice_3D(slice));
+//std::cout << __func__ << "(end): " << __LINE__ << std::endl;
 }
