@@ -94,20 +94,26 @@ public:
                 get_weights_accessor(data_path, "conv1_kernels:0.npy", weights_layout), 
                 get_weights_accessor(data_path, "conv1_biases:0.npy"), 
                 PadStrideInfo(2, 2, 0, 1, 0, 1, DimensionRoundingType::FLOOR))
-              << ActivationLayer(ActivationLayerInfo(ActivationLayerInfo::ActivationFunction::RELU))
-              << PoolingLayer(PoolingLayerInfo(PoolingType::MAX, 3, PadStrideInfo(2, 2, 0, 0, DimensionRoundingType::CEIL)));
-        graph << get_expand_fire_node(data_path, "fire2", weights_layout, 64U, 64U, 16U);
-        graph << get_expand_fire_node(data_path, "fire3", weights_layout, 64U, 64U, 16U);
+              << ActivationLayer(ActivationLayerInfo(ActivationLayerInfo::ActivationFunction::RELU));
+        SubStream conv1(graph);
         graph << PoolingLayer(PoolingLayerInfo(PoolingType::MAX, 3, PadStrideInfo(2, 2, 0, 0, DimensionRoundingType::CEIL)));
-        graph << get_expand_fire_node(data_path, "fire4", weights_layout, 128U, 128U, 32U);
-        graph << get_expand_fire_node(data_path, "fire5", weights_layout, 128U, 128U, 32U);
+        graph << get_fire_node(data_path, "fire2", weights_layout, 16U, 64U, 64U);
+        graph << get_fire_node(data_path, "fire3", weights_layout, 16U, 64U, 64U);
+        SubStream fire3(graph);
         graph << PoolingLayer(PoolingLayerInfo(PoolingType::MAX, 3, PadStrideInfo(2, 2, 0, 0, DimensionRoundingType::CEIL)));
-        graph << get_expand_fire_node(data_path, "fire6", weights_layout, 192U, 192U, 48U);
-        graph << get_expand_fire_node(data_path, "fire7", weights_layout, 192U, 192U, 48U);
-        graph << get_expand_fire_node(data_path, "fire8", weights_layout, 256U, 256U, 64U);
-        graph << get_expand_fire_node(data_path, "fire9", weights_layout, 256U, 256U, 64U);
-        graph << get_expand_fire_node(data_path, "fire10", weights_layout, 384U, 384U, 96U);
-        graph << get_expand_fire_node(data_path, "fire11", weights_layout, 384U, 384U, 96U);
+        graph << get_fire_node(data_path, "fire4", weights_layout, 32U, 128U, 128U);
+        graph << get_fire_node(data_path, "fire5", weights_layout, 32U, 128U, 128U);
+        SubStream fire5(graph);
+        graph << PoolingLayer(PoolingLayerInfo(PoolingType::MAX, 3, PadStrideInfo(2, 2, 0, 0, DimensionRoundingType::CEIL)));
+        graph << get_fire_node(data_path, "fire6", weights_layout, 48U, 192U, 192U);
+        graph << get_fire_node(data_path, "fire7", weights_layout, 48U, 192U, 192U);
+        graph << get_fire_node(data_path, "fire8", weights_layout, 64U, 256U, 256U);
+        graph << get_fire_node(data_path, "fire9", weights_layout, 64U, 256U, 256U);
+
+        SubStream fire9(graph);
+
+        graph << get_fire_node(data_path, "fire10", weights_layout, 96U, 384U, 384U);
+        graph << get_fire_node(data_path, "fire11", weights_layout, 96U, 384U, 384U);
         graph << ConvolutionLayer(
                 3U, 3U, 72U,
                 get_weights_accessor(data_path, "conv12_kernels:0.npy", weights_layout), 
@@ -115,6 +121,29 @@ public:
                 PadStrideInfo(1 ,1, 1, 1))
               << OutputLayer(get_output_accessor(common_params, 5));
               //<< OutputLayer(get_output_ciss(common_params, dst_data));
+
+        fire9 << get_fire_deconv_node(fire9, data_path, "fire_deconv10", weights_layout, 64U, 128U, 128U);
+        graph << EltwiseLayer(std::move(fire5), std::move(fire9), EltwiseOperation::Add);
+        SubStream fire10(graph);
+
+        fire10 << get_fire_deconv_node(fire10, data_path, "fire_deconv11", weights_layout, 32U, 64U, 64U);
+        graph << EltwiseLayer(std::move(fire3), std::move(fire10), EltwiseOperation::Add);
+        SubStream fire11(graph);
+
+        fire11 << get_fire_deconv_node(fire11, data_path, "fire_deconv12", weights_layout, 16U, 32U, 32U);
+        graph << EltwiseLayer(std::move(conv1), std::move(fire11), EltwiseOperation::Add);
+        SubStream fire12(graph);
+
+        fire12 << get_fire_deconv_node(fire12, data_path, "fire_deconv13", weights_layout, 8U, 16U, 16U);
+        fire12 << ConvolutionLayer(
+                  3U, 3U, 2U,
+                  get_weights_accessor(data_path, "conv14_kernels:0.npy", weights_layout),
+                  get_weights_accessor(data_path, "conv14_biases:0.npy"),
+                  PadStrideInfo(1, 1, 1, 1))
+              << OutputLayer(get_output_accessor(common_params, 5));
+              //<< OutputLayer(get_output_ciss(common_params, dst_data));
+
+
 
         // Finalize graph
         GraphConfig config;
@@ -149,34 +178,69 @@ private:
 
     float *dst_data{};
 
-    ConcatLayer get_expand_fire_node(const std::string &data_path, std::string &&param_path, DataLayout weights_layout, unsigned int expand1_filt, unsigned int expand3_filt, unsigned int squeeze_filt)
+    ConcatLayer get_fire_node(const std::string &data_path, std::string &&param_path, DataLayout weights_layout, unsigned int s1x1, unsigned int e1x1, unsigned int e3x3)
     {
-        SubStream i_a(graph);
-        i_a << ConvolutionLayer(
-                1U, 1U, squeeze_filt,
-                get_weights_accessor(data_path, param_path + "_" + "squeeze1x1_kernels:0.npy", weights_layout), 
-                get_weights_accessor(data_path, param_path + "_" + "squeeze1x1_biases:0.npy"),
-                PadStrideInfo(1, 1, 0, 0))
-            << ActivationLayer(ActivationLayerInfo(ActivationLayerInfo::ActivationFunction::RELU));
+        graph << ConvolutionLayer(
+                  1U, 1U, s1x1,
+                  get_weights_accessor(data_path, param_path + "_" + "squeeze1x1_kernels:0.npy", weights_layout), 
+                  get_weights_accessor(data_path, param_path + "_" + "squeeze1x1_biases:0.npy"),
+                  PadStrideInfo(1, 1, 0, 0))
+              << ActivationLayer(ActivationLayerInfo(ActivationLayerInfo::ActivationFunction::RELU));
 
-        SubStream i_b(i_a);
-        i_b << ConvolutionLayer(
-            1U, 1U, expand1_filt,
-            get_weights_accessor(data_path, param_path + "_" + "expand1x1_kernels:0.npy", weights_layout),
-            get_weights_accessor(data_path, param_path + "_" + "expand1x1_biases:0.npy"),
-            PadStrideInfo(1, 1, 0, 0))
-        << ActivationLayer(ActivationLayerInfo(ActivationLayerInfo::ActivationFunction::RELU));
-    
-        SubStream i_c(i_a);
-        i_c << ConvolutionLayer(
-            3U, 3U, expand3_filt,
-            get_weights_accessor(data_path, param_path + "_" + "expand3x3_kernels:0.npy", weights_layout),
-            get_weights_accessor(data_path, param_path + "_" + "expand3x3_biases:0.npy"),
-            PadStrideInfo(1, 1, 1, 1))
-        << ActivationLayer(ActivationLayerInfo(ActivationLayerInfo::ActivationFunction::RELU));
-                    
-        return ConcatLayer(std::move(i_b), std::move(i_c));
+        SubStream expand1x1(graph);
+        expand1x1 << ConvolutionLayer(
+                      1U, 1U, e1x1,
+                      get_weights_accessor(data_path, param_path + "_" + "expand1x1_kernels:0.npy", weights_layout),
+                      get_weights_accessor(data_path, param_path + "_" + "expand1x1_biases:0.npy"),
+                      PadStrideInfo(1, 1, 0, 0))
+                  << ActivationLayer(ActivationLayerInfo(ActivationLayerInfo::ActivationFunction::RELU));
+
+        SubStream expand3x3(graph);
+        expand3x3 << ConvolutionLayer(
+                      3U, 3U, e3x3,
+                      get_weights_accessor(data_path, param_path + "_" + "expand3x3_kernels:0.npy", weights_layout),
+                      get_weights_accessor(data_path, param_path + "_" + "expand3x3_biases:0.npy"),
+                      PadStrideInfo(1, 1, 1, 1))
+                  << ActivationLayer(ActivationLayerInfo(ActivationLayerInfo::ActivationFunction::RELU));
+
+        return ConcatLayer(std::move(expand1x1), std::move(expand3x3));
     }
+
+    ConcatLayer get_fire_deconv_node(SubStream &sub_graph, const std::string &data_path, std::string &&param_path, DataLayout weights_layout, unsigned int s1x1, unsigned int e1x1, unsigned int e3x3)
+    {
+        sub_graph << ConvolutionLayer(
+                  1U, 1U, s1x1,
+                  get_weights_accessor(data_path, param_path + "_" + "squeeze1x1_kernels:0.npy", weights_layout),
+                  get_weights_accessor(data_path, param_path + "_" + "squeeze1x1_biases:0.npy"),
+                  PadStrideInfo(1, 1, 0, 0))
+              << ActivationLayer(ActivationLayerInfo(ActivationLayerInfo::ActivationFunction::RELU))
+              << DeconvolutionLayer(
+                  4U, 4U, s1x1,
+                  get_weights_accessor(data_path, param_path + "_" + "deconv_kernels:0.npy", weights_layout),
+                  get_weights_accessor(data_path, param_path + "_" + "deconv_biases:0.npy"),
+                  PadStrideInfo(2, 2, 1, 1),
+                  Size2D(0, 0))
+              << ActivationLayer(ActivationLayerInfo(ActivationLayerInfo::ActivationFunction::RELU));
+
+        SubStream expand1x1(sub_graph);
+        expand1x1 << ConvolutionLayer(
+                      1U, 1U, e1x1,
+                      get_weights_accessor(data_path, param_path + "_" + "expand1x1_kernels:0.npy", weights_layout),
+                      get_weights_accessor(data_path, param_path + "_" + "expand1x1_biases:0.npy"),
+                      PadStrideInfo(1, 1, 0, 0))
+                  << ActivationLayer(ActivationLayerInfo(ActivationLayerInfo::ActivationFunction::RELU));
+
+        SubStream expand3x3(sub_graph);
+        expand3x3 << ConvolutionLayer(
+                      3U, 3U, e3x3,
+                      get_weights_accessor(data_path, param_path + "_" + "expand3x3_kernels:0.npy", weights_layout),
+                      get_weights_accessor(data_path, param_path + "_" + "expand3x3_biases:0.npy"),
+                      PadStrideInfo(1, 1, 1, 1))
+                  << ActivationLayer(ActivationLayerInfo(ActivationLayerInfo::ActivationFunction::RELU));
+
+        return ConcatLayer(std::move(expand1x1), std::move(expand3x3));
+    }
+
 };
 
 /** Main program for YOLOv3
